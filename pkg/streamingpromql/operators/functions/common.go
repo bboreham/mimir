@@ -100,9 +100,21 @@ type FunctionOverInstantVectorDefinition struct {
 	SeriesMetadataFunction SeriesMetadataFunctionDefinition
 }
 
+type PartialRangeVectorStepFunction func(
+	firstStep *types.RangeVectorStepData,
+	lastStep *types.RangeVectorStepData,
+	partial *rangePartial,
+	rangeSeconds float64,
+	scalarArgsData []types.ScalarData,
+	timeRange types.QueryTimeRange,
+	emitAnnotation types.EmitAnnotationFunc,
+	memoryConsumptionTracker *limiting.MemoryConsumptionTracker,
+) (f float64, hasFloat bool, h *histogram.FloatHistogram, err error)
+
 type FunctionOverRangeVectorDefinition struct {
 	// StepFunc is the function that computes an output sample for a single step.
-	StepFunc RangeVectorStepFunction
+	StepFunc        RangeVectorStepFunction
+	PartialStepFunc PartialRangeVectorStepFunction
 
 	// SeriesValidationFuncFactory is the function that creates a validator for a complete series, emitting any annotations
 	// for that series.

@@ -142,7 +142,40 @@ func minOverTime(step *types.RangeVectorStepData, _ float64, _ []types.ScalarDat
 var SumOverTime = FunctionOverRangeVectorDefinition{
 	SeriesMetadataFunction:         DropSeriesName,
 	StepFunc:                       sumOverTime,
+	PartialStepFunc:                sumOverTimePartial,
 	NeedsSeriesNamesForAnnotations: true,
+}
+
+type rangePartial struct {
+	sumF       float64
+	sumH       *histogram.FloatHistogram
+	hasFloat   bool
+	RangeStart int64
+	RangeEnd   int64
+}
+
+// Given a result from last step, subtract the old bit at the start and add the new bit at the end.
+func sumOverTimePartial(firstStep, lastStep *types.RangeVectorStepData, partial *rangePartial, _ float64, _ []types.ScalarData, _ types.QueryTimeRange, emitAnnotation types.EmitAnnotationFunc, _ *limiting.MemoryConsumptionTracker) (float64, bool, *histogram.FloatHistogram, error) {
+	firstF, firstHasFloat, firstH, err := sumOverTime(firstStep, 0, nil, types.QueryTimeRange{}, nil, nil)
+	if err != nil {
+		return 0, false, nil, err
+	}
+	lastF, lastHasFloat, lastH, err := sumOverTime(firstStep, 0, nil, types.QueryTimeRange{}, nil, nil)
+	if err != nil {
+		return 0, false, nil, err
+	}
+	if partial.hasFloat && (firstH != nil || lastH != nil) ||
+		!partial.hasFloat && (firstHasFloat || lastHasFloat) {
+		emitAnnotation(annotations.NewMixedFloatsHistogramsWarning)
+		return 0, false, nil, nil
+	}
+	if partial.hasFloat {
+		partial.sumF = partial.sumF - firstF + lastF
+	} else {
+		partial.sumH.Sub(firstH)
+		partial.sumH.Add(lastH)
+	}
+	return partial.sumF, partial.hasFloat, partial.sumH, nil
 }
 
 func sumOverTime(step *types.RangeVectorStepData, _ float64, _ []types.ScalarData, _ types.QueryTimeRange, emitAnnotation types.EmitAnnotationFunc, _ *limiting.MemoryConsumptionTracker) (float64, bool, *histogram.FloatHistogram, error) {

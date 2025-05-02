@@ -9,6 +9,7 @@ package functions
 import (
 	"context"
 
+	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser/posrange"
 	"github.com/prometheus/prometheus/util/annotations"
@@ -129,22 +130,37 @@ func (m *FunctionOverRangeVector) NextSeries(ctx context.Context) (types.Instant
 	}()
 
 	data := types.InstantVectorSeriesData{}
+	var partial *rangePartial
 
 	for {
-		step, err := m.Inner.NextStepSamples()
+		var step *types.RangeVectorStepData
+		var err error
+		var f float64
+		var hasFloat bool
+		var h *histogram.FloatHistogram
 
-		// nolint:errorlint // errors.Is introduces a performance overhead, and NextStepSamples is guaranteed to return exactly EOS, never a wrapped error.
-		if err == types.EOS {
-			if m.seriesValidationFunc != nil {
-				m.seriesValidationFunc(data, m.metricNames.GetMetricNameForSeries(m.currentSeriesIndex), m.emitAnnotationFunc)
+		if m.Func.PartialStepFunc != nil {
+			if partial == nil {
+				step, err = m.Inner.NextStepSamples()
+				if err != nil {
+					return m.validateOrErr(data, err)
+				}
+				f, hasFloat, h, err = m.Func.StepFunc(step, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
+				partial = &rangePartial{sumF: f, hasFloat: hasFloat, sumH: h}
+			} else {
+				firstStep := _
+				lastStep := _
+				f, hasFloat, h, err = m.Func.PartialStepFunc(firstStep, lastStep, partial, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
+			}
+		} else {
+			step, err = m.Inner.NextStepSamples()
+			if err != nil {
+				return m.validateOrErr(data, err)
 			}
 
-			return data, nil
-		} else if err != nil {
-			return types.InstantVectorSeriesData{}, err
+			f, hasFloat, h, err = m.Func.StepFunc(step, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
 		}
 
-		f, hasFloat, h, err := m.Func.StepFunc(step, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
 		if err != nil {
 			return types.InstantVectorSeriesData{}, err
 		}
@@ -175,6 +191,18 @@ func (m *FunctionOverRangeVector) NextSeries(ctx context.Context) (types.Instant
 			data.Histograms = append(data.Histograms, promql.HPoint{T: step.StepT, H: h})
 		}
 	}
+}
+
+func (m *FunctionOverRangeVector) validateOrErr(data types.InstantVectorSeriesData, err error) (types.InstantVectorSeriesData, error) {
+	// nolint:errorlint // errors.Is introduces a performance overhead, and NextStepSamples is guaranteed to return exactly EOS, never a wrapped error.
+	if err == types.EOS {
+		if m.seriesValidationFunc != nil {
+			m.seriesValidationFunc(data, m.metricNames.GetMetricNameForSeries(m.currentSeriesIndex), m.emitAnnotationFunc)
+		}
+
+		return data, nil
+	}
+	return types.InstantVectorSeriesData{}, err
 }
 
 func (m *FunctionOverRangeVector) emitAnnotation(generator types.AnnotationGenerator) {
