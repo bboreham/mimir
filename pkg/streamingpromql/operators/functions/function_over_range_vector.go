@@ -131,34 +131,46 @@ func (m *FunctionOverRangeVector) NextSeries(ctx context.Context) (types.Instant
 
 	data := types.InstantVectorSeriesData{}
 	var partial *rangePartial
+	step := &types.RangeVectorStepData{}
+	firstStep, lastStep := &types.RangeVectorStepData{}, &types.RangeVectorStepData{}
 
 	for {
-		var step *types.RangeVectorStepData
 		var err error
 		var f float64
 		var hasFloat bool
 		var h *histogram.FloatHistogram
 
-		if m.Func.PartialStepFunc != nil {
-			if partial == nil {
-				step, err = m.Inner.NextStepSamples()
-				if err != nil {
-					return m.validateOrErr(data, err)
-				}
-				f, hasFloat, h, err = m.Func.StepFunc(step, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
-				partial = &rangePartial{sumF: f, hasFloat: hasFloat, sumH: h}
-			} else {
-				firstStep := _
-				lastStep := _
-				f, hasFloat, h, err = m.Func.PartialStepFunc(firstStep, lastStep, partial, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
+		if partial == nil || m.Func.PartialStepFunc == nil {
+			err = m.Inner.NextStep()
+			if err != nil {
+				return m.validateOrErr(data, err)
 			}
-		} else {
-			step, err = m.Inner.NextStepSamples()
+			err = m.Inner.StepSamples(step)
 			if err != nil {
 				return m.validateOrErr(data, err)
 			}
 
 			f, hasFloat, h, err = m.Func.StepFunc(step, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
+			if err != nil {
+				return types.InstantVectorSeriesData{}, err
+			}
+		}
+
+		if false && m.Func.PartialStepFunc != nil {
+			if partial == nil {
+				// First time round the loop, we initialize.
+				partial = &rangePartial{sumF: f, hasFloat: hasFloat, sumH: h}
+			} else {
+				err = m.Inner.StepSamples(firstStep)
+				if err != nil {
+					return m.validateOrErr(data, err)
+				}
+				err = m.Inner.StepSamples(lastStep)
+				if err != nil {
+					return m.validateOrErr(data, err)
+				}
+				f, hasFloat, h, err = m.Func.PartialStepFunc(firstStep, lastStep, partial, m.rangeSeconds, m.scalarArgsData, m.timeRange, m.emitAnnotationFunc, m.MemoryConsumptionTracker)
+			}
 		}
 
 		if err != nil {
@@ -194,7 +206,7 @@ func (m *FunctionOverRangeVector) NextSeries(ctx context.Context) (types.Instant
 }
 
 func (m *FunctionOverRangeVector) validateOrErr(data types.InstantVectorSeriesData, err error) (types.InstantVectorSeriesData, error) {
-	// nolint:errorlint // errors.Is introduces a performance overhead, and NextStepSamples is guaranteed to return exactly EOS, never a wrapped error.
+	// nolint:errorlint // errors.Is introduces a performance overhead, and NextStep is guaranteed to return exactly EOS, never a wrapped error.
 	if err == types.EOS {
 		if m.seriesValidationFunc != nil {
 			m.seriesValidationFunc(data, m.metricNames.GetMetricNameForSeries(m.currentSeriesIndex), m.emitAnnotationFunc)

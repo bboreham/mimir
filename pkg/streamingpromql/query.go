@@ -762,6 +762,7 @@ func (q *Query) populateMatrixFromInstantVectorOperator(ctx context.Context, o t
 
 func (q *Query) populateMatrixFromRangeVectorOperator(ctx context.Context, o types.RangeVectorOperator, series []types.SeriesMetadata) (promql.Matrix, error) {
 	m := types.GetMatrix(len(series))
+	step := &types.RangeVectorStepData{}
 
 	for i, s := range series {
 		err := o.NextSeries(ctx)
@@ -773,7 +774,11 @@ func (q *Query) populateMatrixFromRangeVectorOperator(ctx context.Context, o typ
 			return nil, err
 		}
 
-		step, err := o.NextStepSamples()
+		err = o.NextStep()
+		if err != nil {
+			return nil, err
+		}
+		err = o.StepSamples(step)
 		if err != nil {
 			return nil, err
 		}

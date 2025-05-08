@@ -65,6 +65,7 @@ func (a *AbsentOverTime) SeriesMetadata(ctx context.Context) ([]types.SeriesMeta
 	metadata = append(metadata, types.SeriesMetadata{
 		Labels: a.Labels,
 	})
+	step := &types.RangeVectorStepData{}
 
 	for range innerMetadata {
 		err := a.Inner.NextSeries(ctx)
@@ -72,7 +73,11 @@ func (a *AbsentOverTime) SeriesMetadata(ctx context.Context) ([]types.SeriesMeta
 			return nil, err
 		}
 		for stepIdx := range a.TimeRange.StepCount {
-			step, err := a.Inner.NextStepSamples()
+			err := a.Inner.NextStep()
+			if err != nil {
+				return nil, err
+			}
+			err = a.Inner.StepSamples(step)
 			if err != nil {
 				return nil, err
 			}

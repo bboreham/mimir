@@ -23,11 +23,11 @@ type Subquery struct {
 
 	expressionPosition posrange.PositionRange
 
+	stepT             int64
 	nextStepT         int64
 	rangeMilliseconds int64
 	floats            *types.FPointRingBuffer
 	histograms        *types.HPointRingBuffer
-	stepData          *types.RangeVectorStepData // Retain the last step data instance we used to avoid allocating it for every step.
 }
 
 var _ types.RangeVectorOperator = &Subquery{}
@@ -51,7 +51,6 @@ func NewSubquery(
 		rangeMilliseconds:    subqueryRange.Milliseconds(),
 		floats:               types.NewFPointRingBuffer(memoryConsumptionTracker),
 		histograms:           types.NewHPointRingBuffer(memoryConsumptionTracker),
-		stepData:             &types.RangeVectorStepData{},
 	}
 }
 
@@ -90,15 +89,19 @@ func (s *Subquery) NextSeries(ctx context.Context) error {
 	return nil
 }
 
-func (s *Subquery) NextStepSamples() (*types.RangeVectorStepData, error) {
+func (s *Subquery) NextStep() error {
 	if s.nextStepT > s.ParentQueryTimeRange.EndT {
-		return nil, types.EOS
+		return types.EOS
 	}
 
-	s.stepData.StepT = s.nextStepT
-	rangeEnd := s.nextStepT
+	s.stepT = s.nextStepT
 	s.nextStepT += s.ParentQueryTimeRange.IntervalMilliseconds
+	return nil
+}
 
+func (s *Subquery) StepSamples(stepData *types.RangeVectorStepData) error {
+	stepData.StepT = s.stepT
+	rangeEnd := s.stepT
 	if s.SubqueryTimestamp != nil {
 		// Timestamp from @ modifier takes precedence over query evaluation timestamp.
 		rangeEnd = *s.SubqueryTimestamp
@@ -110,12 +113,12 @@ func (s *Subquery) NextStepSamples() (*types.RangeVectorStepData, error) {
 	s.floats.DiscardPointsAtOrBefore(rangeStart)
 	s.histograms.DiscardPointsAtOrBefore(rangeStart)
 
-	s.stepData.Floats = s.floats.ViewUntilSearchingForwards(rangeEnd, s.stepData.Floats)
-	s.stepData.Histograms = s.histograms.ViewUntilSearchingForwards(rangeEnd, s.stepData.Histograms)
-	s.stepData.RangeStart = rangeStart
-	s.stepData.RangeEnd = rangeEnd
+	stepData.Floats = s.floats.ViewUntilSearchingForwards(rangeEnd, stepData.Floats)
+	stepData.Histograms = s.histograms.ViewUntilSearchingForwards(rangeEnd, stepData.Histograms)
+	stepData.RangeStart = rangeStart
+	stepData.RangeEnd = rangeEnd
 
-	return s.stepData, nil
+	return nil
 }
 
 func (s *Subquery) StepCount() int {

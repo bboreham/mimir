@@ -61,10 +61,13 @@ type RangeVectorOperator interface {
 	// SeriesMetadata must be called exactly once before calling NextSeries.
 	NextSeries(ctx context.Context) error
 
-	// NextStepSamples returns populated RingBuffers with the samples for the next time step for the
-	// current series and the timestamps of the next time step, or returns EOS if no more time
+	// NextStep advances to the next time step for the current series, or returns EOS if no more time
 	// steps are available.
-	NextStepSamples() (*RangeVectorStepData, error)
+	NextStep() error
+
+	// StepSamples populates the passed struct with the samples for the current time step for the
+	// current series.
+	StepSamples(*RangeVectorStepData) error
 }
 
 // ScalarOperator represents all operators that produce scalars.

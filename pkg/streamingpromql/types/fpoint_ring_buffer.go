@@ -171,6 +171,7 @@ func (b *FPointRingBuffer) Close() {
 
 type FPointRingBufferView struct {
 	buffer *FPointRingBuffer
+	offset int
 	size   int
 }
 
@@ -188,16 +189,17 @@ func (v FPointRingBufferView) UnsafePoints() (head []promql.FPoint, tail []promq
 		return nil, nil
 	}
 
-	endOfHeadSegment := v.buffer.firstIndex + v.size
+	startOfHeadSegment := (v.buffer.firstIndex + v.offset) & v.buffer.pointsIndexMask
+	endOfHeadSegment := startOfHeadSegment + v.size
 
 	if endOfHeadSegment > len(v.buffer.points) {
 		// Need to wrap around.
 		endOfTailSegment := endOfHeadSegment - len(v.buffer.points)
 		endOfHeadSegment = len(v.buffer.points)
-		return v.buffer.points[v.buffer.firstIndex:endOfHeadSegment], v.buffer.points[0:endOfTailSegment]
+		return v.buffer.points[startOfHeadSegment:endOfHeadSegment], v.buffer.points[0:endOfTailSegment]
 	}
 
-	return v.buffer.points[v.buffer.firstIndex:endOfHeadSegment], nil
+	return v.buffer.points[startOfHeadSegment:endOfHeadSegment], nil
 }
 
 // CopyPoints returns a single slice of the points in this buffer view.
@@ -224,7 +226,7 @@ func (v FPointRingBufferView) CopyPoints() ([]promql.FPoint, error) {
 
 // ForEach calls f for each point in this buffer view.
 func (v FPointRingBufferView) ForEach(f func(p promql.FPoint)) {
-	for i := 0; i < v.size; i++ {
+	for i := v.offset; i < v.offset+v.size; i++ {
 		f(v.buffer.pointAt(i))
 	}
 }
@@ -236,7 +238,7 @@ func (v FPointRingBufferView) First() promql.FPoint {
 		panic("Can't get first element of empty buffer")
 	}
 
-	return v.buffer.points[v.buffer.firstIndex]
+	return v.buffer.pointAt(v.offset)
 }
 
 // Last returns the last point in this ring buffer view.
@@ -246,7 +248,7 @@ func (v FPointRingBufferView) Last() (promql.FPoint, bool) {
 		return promql.FPoint{}, false
 	}
 
-	return v.buffer.pointAt(v.size - 1), true
+	return v.buffer.pointAt(v.offset + v.size - 1), true
 }
 
 // Count returns the number of points in this ring buffer view.
@@ -266,7 +268,7 @@ func (v FPointRingBufferView) PointAt(i int) promql.FPoint {
 		panic(fmt.Sprintf("PointAt(): out of range, requested index %v but have length %v", i, v.size))
 	}
 
-	return v.buffer.pointAt(i)
+	return v.buffer.pointAt(v.offset + i)
 }
 
 // These hooks exist so we can override them during unit tests.

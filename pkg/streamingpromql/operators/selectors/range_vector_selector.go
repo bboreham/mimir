@@ -25,10 +25,10 @@ type RangeVectorSelector struct {
 
 	rangeMilliseconds int64
 	chunkIterator     chunkenc.Iterator
+	stepT             int64
 	nextStepT         int64
 	floats            *types.FPointRingBuffer
 	histograms        *types.HPointRingBuffer
-	stepData          *types.RangeVectorStepData // Retain the last step data instance we used to avoid allocating it for every step.
 }
 
 var _ types.RangeVectorOperator = &RangeVectorSelector{}
@@ -39,7 +39,6 @@ func NewRangeVectorSelector(selector *Selector, memoryConsumptionTracker *limiti
 		Stats:      stats,
 		floats:     types.NewFPointRingBuffer(memoryConsumptionTracker),
 		histograms: types.NewHPointRingBuffer(memoryConsumptionTracker),
-		stepData:   &types.RangeVectorStepData{},
 	}
 }
 
@@ -75,15 +74,19 @@ func (m *RangeVectorSelector) NextSeries(ctx context.Context) error {
 	return nil
 }
 
-func (m *RangeVectorSelector) NextStepSamples() (*types.RangeVectorStepData, error) {
+func (m *RangeVectorSelector) NextStep() error {
 	if m.nextStepT > m.Selector.TimeRange.EndT {
-		return nil, types.EOS
+		return types.EOS
 	}
 
-	m.stepData.StepT = m.nextStepT
-	rangeEnd := m.nextStepT
+	m.stepT = m.nextStepT
 	m.nextStepT += m.Selector.TimeRange.IntervalMilliseconds
+	return nil
+}
 
+func (m *RangeVectorSelector) StepSamples(stepData *types.RangeVectorStepData) error {
+	stepData.StepT = m.stepT
+	rangeEnd := m.stepT
 	if m.Selector.Timestamp != nil {
 		// Timestamp from @ modifier takes precedence over query evaluation timestamp.
 		rangeEnd = *m.Selector.Timestamp
@@ -96,17 +99,45 @@ func (m *RangeVectorSelector) NextStepSamples() (*types.RangeVectorStepData, err
 	m.histograms.DiscardPointsAtOrBefore(rangeStart)
 
 	if err := m.fillBuffer(m.floats, m.histograms, rangeStart, rangeEnd); err != nil {
-		return nil, err
+		return err
 	}
 
-	m.stepData.Floats = m.floats.ViewUntilSearchingBackwards(rangeEnd, m.stepData.Floats)
-	m.stepData.Histograms = m.histograms.ViewUntilSearchingBackwards(rangeEnd, m.stepData.Histograms)
-	m.stepData.RangeStart = rangeStart
-	m.stepData.RangeEnd = rangeEnd
+	stepData.Floats = m.floats.ViewUntilSearchingBackwards(rangeEnd, stepData.Floats)
+	stepData.Histograms = m.histograms.ViewUntilSearchingBackwards(rangeEnd, stepData.Histograms)
+	stepData.RangeStart = rangeStart
+	stepData.RangeEnd = rangeEnd
 
-	m.Stats.TotalSamples += int64(m.stepData.Floats.Count()) + m.stepData.Histograms.EquivalentFloatSampleCount()
+	m.Stats.TotalSamples += int64(stepData.Floats.Count()) + stepData.Histograms.EquivalentFloatSampleCount()
 
-	return m.stepData, nil
+	return nil
+}
+
+func (m *RangeVectorSelector) StepSamplesPartial(firstStep, lastStep *types.RangeVectorStepData) error {
+	stepData.StepT = m.stepT
+	rangeEnd := m.stepT
+	if m.Selector.Timestamp != nil {
+		// Timestamp from @ modifier takes precedence over query evaluation timestamp.
+		rangeEnd = *m.Selector.Timestamp
+	}
+
+	// Apply offset after adjusting for timestamp from @ modifier.
+	rangeEnd = rangeEnd - m.Selector.Offset
+	rangeStart := rangeEnd - m.rangeMilliseconds - m.Selector.TimeRange.IntervalMilliseconds
+	m.floats.DiscardPointsAtOrBefore(rangeStart)
+	m.histograms.DiscardPointsAtOrBefore(rangeStart)
+
+	if err := m.fillBuffer(m.floats, m.histograms, rangeStart, rangeEnd); err != nil {
+		return err
+	}
+
+	stepData.Floats = m.floats.ViewUntilSearchingBackwards(rangeEnd, stepData.Floats)
+	stepData.Histograms = m.histograms.ViewUntilSearchingBackwards(rangeEnd, stepData.Histograms)
+	stepData.RangeStart = rangeStart
+	stepData.RangeEnd = rangeEnd
+
+	m.Stats.TotalSamples += int64(stepData.Floats.Count()) + stepData.Histograms.EquivalentFloatSampleCount()
+
+	return nil
 }
 
 func (m *RangeVectorSelector) fillBuffer(floats *types.FPointRingBuffer, histograms *types.HPointRingBuffer, rangeStart, rangeEnd int64) error {
